@@ -1,9 +1,11 @@
--- [[ CUSTOM JOYSTICK - BOTTOM-LEFT 50% WITH ANIMATION FIX ]] --
+-- [[ CUSTOM JOYSTICK - BOTTOM-LEFT 50% WITH FORCE ANIMATION STATE ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
 local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 
 -- 1. สร้าง ScreenGui และ Touch Zone (ซ้ายล่าง 50%)
 local screenGui = Instance.new("ScreenGui")
@@ -15,7 +17,7 @@ local touchZone = Instance.new("Frame")
 touchZone.Name = "TouchZone"
 touchZone.Parent = screenGui
 touchZone.Size = UDim2.new(0.5, 0, 0.5, 0)      -- กว้าง 50% สูง 50%
-touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- ซ้ายล่าง
+touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- โซนซ้ายล่าง
 touchZone.BackgroundTransparency = 1 
 touchZone.Active = true
 
@@ -76,11 +78,10 @@ UserInputService.InputChanged:Connect(function(input)
         local thumbOffset = direction * clampedDistance
         joystickThumb.Position = UDim2.new(0.5, thumbOffset.X, 0.5, thumbOffset.Y)
 
-        -- คำนวณค่าทิศทางสเกล -1 ถึง 1
         local normX = thumbOffset.X / joystickRadius
-        local normZ = thumbOffset.Y / joystickRadius -- ในระบบ Native Move ค่า Z เป็นบวกคือเดินหน้า/ลบคือถอยหลัง
+        local normForward = -thumbOffset.Y / joystickRadius
 
-        moveVector = Vector3.new(normX, 0, normZ)
+        moveVector = Vector3.new(normX, 0, normForward)
     end
 end)
 
@@ -94,16 +95,32 @@ end
 
 UserInputService.InputEnded:Connect(stopJoystick)
 
--- 4. สั่งการเคลื่อนที่ผ่าน Native Movement Engine (รองรับ Animation 100%)
+-- 4. สั่งการเคลื่อนที่ + กระตุ้น State ของ Animation
 RunService.RenderStepped:Connect(function()
     local character = localPlayer.Character
-    if character and moveVector.Magnitude > 0 then
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if humanoid then
-            -- สั่ง Move แบบ relativeToCamera = true ให้ Roblox คำนวณทิศทางตามกล้องและอัปเดต Animate Script อัตโนมัติ
-            humanoid:Move(moveVector, true)
+    if not character then return end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    if moveVector.Magnitude > 0 then
+        -- คำนวณทิศทางตามกล้อง
+        local camCFrame = camera.CFrame
+        local cameraForward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+        local cameraRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
+        local worldDirection = (cameraRight * moveVector.X) + (cameraForward * moveVector.Z)
+
+        -- 1. สั่งเคลื่อนที่ตัวละคร
+        humanoid:Move(worldDirection, false)
+
+        -- 2. บังคับเปลี่ยน State เป็น Running เพื่อปลุกให้ Animation Controller ของเกมทำงาน
+        if humanoid:GetState() ~= Enum.HumanoidStateType.Running and humanoid:GetState() ~= Enum.HumanoidStateType.Freefall then
+            humanoid:ChangeState(Enum.HumanoidStateType.Running)
         end
+    else
+        -- เมื่อหยุดลากจอย ให้สั่งหยุดย้ายตำแหน่ง
+        humanoid:Move(Vector3.new(0, 0, 0), false)
     end
 end)
 
-print("✅ [Custom Joystick] Fixed Movement Animation Issue!")
+print("✅ [Custom Joystick] Force State Animation Fix Loaded!")
