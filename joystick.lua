@@ -1,4 +1,4 @@
--- [[ CUSTOM JOYSTICK - CONTINUOUS WASD EMULATOR ]] --
+-- [[ CUSTOM JOYSTICK - ANTI-RESET WASD EMULATOR ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -49,12 +49,7 @@ local thumbCorner = Instance.new("UICorner")
 thumbCorner.CornerRadius = UDim.new(1, 0)
 thumbCorner.Parent = joystickThumb
 
--- 3. ตัวแปรสำหรับรับค่า
-local currentTouchInput = nil
-local startPos = Vector2.new(0, 0)
-local currentNormX = 0
-local currentNormZ = 0
-
+-- 3. ระบบจัดการปุ่ม WASD
 local activeKeys = {
     W = false,
     A = false,
@@ -62,7 +57,27 @@ local activeKeys = {
     D = false
 }
 
--- ฟังก์ชันปล่อยปุ่มทั้งหมด
+local function updateWASDState(normX, normZ)
+    local deadzone = 0.25
+
+    local shouldW = normZ < -deadzone
+    local shouldS = normZ > deadzone
+    local shouldA = normX < -deadzone
+    local shouldD = normX > deadzone
+
+    -- ปล่อยปุ่มที่ไม่ได้กดแล้ว
+    if not shouldW and activeKeys.W then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game) end
+    if not shouldS and activeKeys.S then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game) end
+    if not shouldA and activeKeys.A then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.A, false, game) end
+    if not shouldD and activeKeys.D then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.D, false, game) end
+
+    -- อัปเดตสถานะปุ่ม
+    activeKeys.W = shouldW
+    activeKeys.S = shouldS
+    activeKeys.A = shouldA
+    activeKeys.D = shouldD
+end
+
 local function releaseAllKeys()
     for keyName, isPressed in pairs(activeKeys) do
         if isPressed then
@@ -72,7 +87,10 @@ local function releaseAllKeys()
     end
 end
 
--- 4. ระบบรับค่า Touch/Mouse Input
+-- 4. ระบบรับ Touch Input
+local currentTouchInput = nil
+local startPos = Vector2.new(0, 0)
+
 touchZone.InputBegan:Connect(function(input)
     if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and not currentTouchInput then
         currentTouchInput = input
@@ -96,9 +114,10 @@ UserInputService.InputChanged:Connect(function(input)
         local thumbOffset = direction * clampedDistance
         joystickThumb.Position = UDim2.new(0.5, thumbOffset.X, 0.5, thumbOffset.Y)
 
-        -- อัปเดตค่าพิกัดการลากเก็บไว้ในตัวแปร
-        currentNormX = thumbOffset.X / joystickRadius
-        currentNormZ = thumbOffset.Y / joystickRadius
+        local normX = thumbOffset.X / joystickRadius
+        local normZ = thumbOffset.Y / joystickRadius
+
+        updateWASDState(normX, normZ)
     end
 end)
 
@@ -106,43 +125,21 @@ local function stopJoystick(input)
     if input == currentTouchInput then
         currentTouchInput = nil
         joystickBase.Visible = false
-        currentNormX = 0
-        currentNormZ = 0
         releaseAllKeys()
     end
 end
 
 UserInputService.InputEnded:Connect(stopJoystick)
 
--- 5. ลูปทำงานต่อเนื่องทุกเฟรม (RenderStepped) เพื่อป้องกันปุ่มหลุด/หยุดเดินกลางทาง
+-- 5. ส่งสัญญาณย้ำคีย์บอร์ดทุกเฟรม (ป้องกัน Roblox Auto-Reset เมื่อสลับโหมด Touch)
 RunService.RenderStepped:Connect(function()
-    if not currentTouchInput then return end
-
-    local deadzone = 0.2
-    local shouldW = currentNormZ < -deadzone
-    local shouldS = currentNormZ > deadzone
-    local shouldA = currentNormX < -deadzone
-    local shouldD = currentNormX > deadzone
-
-    -- อัปเดตและย้ำสัญญาณกดปุ่ม W, A, S, D
-    local keysToUpdate = {
-        {Key = "W", ShouldPress = shouldW, Code = Enum.KeyCode.W},
-        {Key = "S", ShouldPress = shouldS, Code = Enum.KeyCode.S},
-        {Key = "A", ShouldPress = shouldA, Code = Enum.KeyCode.A},
-        {Key = "D", ShouldPress = shouldD, Code = Enum.KeyCode.D},
-    }
-
-    for _, data in ipairs(keysToUpdate) do
-        if data.ShouldPress then
-            -- ย้ำสัญญาณกดค้างตลอดเวลา
-            VirtualInputManager:SendKeyEvent(true, data.Code, false, game)
-            activeKeys[data.Key] = true
-        elseif activeKeys[data.Key] then
-            -- ปล่อยปุ่มเมื่อไม่อยู่ในทิศทางนั้น
-            VirtualInputManager:SendKeyEvent(false, data.Code, false, game)
-            activeKeys[data.Key] = false
+    if currentTouchInput then
+        for keyName, isPressed in pairs(activeKeys) do
+            if isPressed then
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode[keyName], false, game)
+            end
         end
     end
 end)
 
-print("✅ [Custom Joystick] Fixed Drag Hold Issue!")
+print("✅ [Custom Joystick] Continuous Hold Fix Loaded!")
