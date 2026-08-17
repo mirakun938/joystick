@@ -1,11 +1,12 @@
--- [[ CUSTOM JOYSTICK - WASD KEYBOARD EMULATOR ]] --
+-- [[ CUSTOM JOYSTICK - CONTINUOUS WASD EMULATOR ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local RunService = game:GetService("RunService")
 
 local localPlayer = Players.LocalPlayer
 
--- 1. สร้าง ScreenGui และ Touch Zone (ซ้ายล่าง 50% ตามที่คุณกำหนด)
+-- 1. สร้าง ScreenGui และ Touch Zone (ซ้ายล่าง 50%)
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CustomJoystickGui"
 screenGui.ResetOnSpawn = false
@@ -19,7 +20,7 @@ touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- ตำแหน่งซ้�
 touchZone.BackgroundTransparency = 1 
 touchZone.Active = true
 
--- 2. สร้าง UI Joystick (Base & Thumb)
+-- 2. UI Joystick (Base & Thumb)
 local joystickRadius = 60
 
 local joystickBase = Instance.new("Frame")
@@ -48,7 +49,12 @@ local thumbCorner = Instance.new("UICorner")
 thumbCorner.CornerRadius = UDim.new(1, 0)
 thumbCorner.Parent = joystickThumb
 
--- 3. ระบบจำลองการกดคีย์บอร์ด (WASD Keyboard System)
+-- 3. ตัวแปรสำหรับรับค่า
+local currentTouchInput = nil
+local startPos = Vector2.new(0, 0)
+local currentNormX = 0
+local currentNormZ = 0
+
 local activeKeys = {
     W = false,
     A = false,
@@ -56,50 +62,17 @@ local activeKeys = {
     D = false
 }
 
-local function updateWASDKeys(normX, normZ)
-    local deadzone = 0.25 -- ระยะเริ่มต้นของจอยสติ๊กก่อนเริ่มส่งสัญญาณกด
-
-    local shouldW = normZ < -deadzone -- ดันขึ้น = กด W
-    local shouldS = normZ > deadzone  -- ดึงลง = กด S
-    local shouldA = normX < -deadzone -- ลากซ้าย = กด A
-    local shouldD = normX > deadzone  -- ลากขวา = กด D
-
-    -- ส่งสัญญาณกด/ปล่อย ปุ่ม W
-    if shouldW ~= activeKeys.W then
-        activeKeys.W = shouldW
-        VirtualInputManager:SendKeyEvent(shouldW, Enum.KeyCode.W, false, game)
-    end
-    -- ส่งสัญญาณกด/ปล่อย ปุ่ม S
-    if shouldS ~= activeKeys.S then
-        activeKeys.S = shouldS
-        VirtualInputManager:SendKeyEvent(shouldS, Enum.KeyCode.S, false, game)
-    end
-    -- ส่งสัญญาณกด/ปล่อย ปุ่ม A
-    if shouldA ~= activeKeys.A then
-        activeKeys.A = shouldA
-        VirtualInputManager:SendKeyEvent(shouldA, Enum.KeyCode.A, false, game)
-    end
-    -- ส่งสัญญาณกด/ปล่อย ปุ่ม D
-    if shouldD ~= activeKeys.D then
-        activeKeys.D = shouldD
-        VirtualInputManager:SendKeyEvent(shouldD, Enum.KeyCode.D, false, game)
-    end
-end
-
+-- ฟังก์ชันปล่อยปุ่มทั้งหมด
 local function releaseAllKeys()
     for keyName, isPressed in pairs(activeKeys) do
         if isPressed then
             activeKeys[keyName] = false
-            local keyCode = Enum.KeyCode[keyName]
-            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode[keyName], false, game)
         end
     end
 end
 
 -- 4. ระบบรับค่า Touch/Mouse Input
-local currentTouchInput = nil
-local startPos = Vector2.new(0, 0)
-
 touchZone.InputBegan:Connect(function(input)
     if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and not currentTouchInput then
         currentTouchInput = input
@@ -123,11 +96,9 @@ UserInputService.InputChanged:Connect(function(input)
         local thumbOffset = direction * clampedDistance
         joystickThumb.Position = UDim2.new(0.5, thumbOffset.X, 0.5, thumbOffset.Y)
 
-        local normX = thumbOffset.X / joystickRadius
-        local normZ = thumbOffset.Y / joystickRadius
-
-        -- แปลงระยะจอยสติ๊กเป็นคำสั่งกด WASD
-        updateWASDKeys(normX, normZ)
+        -- อัปเดตค่าพิกัดการลากเก็บไว้ในตัวแปร
+        currentNormX = thumbOffset.X / joystickRadius
+        currentNormZ = thumbOffset.Y / joystickRadius
     end
 end)
 
@@ -135,10 +106,43 @@ local function stopJoystick(input)
     if input == currentTouchInput then
         currentTouchInput = nil
         joystickBase.Visible = false
-        releaseAllKeys() -- ปล่อยปุ่มเดินทั้งหมดเมื่อยกนิ้วออก
+        currentNormX = 0
+        currentNormZ = 0
+        releaseAllKeys()
     end
 end
 
 UserInputService.InputEnded:Connect(stopJoystick)
 
-print("✅ [Custom Joystick] WASD Emulator Ready! (Fixed Movement & Animation)")
+-- 5. ลูปทำงานต่อเนื่องทุกเฟรม (RenderStepped) เพื่อป้องกันปุ่มหลุด/หยุดเดินกลางทาง
+RunService.RenderStepped:Connect(function()
+    if not currentTouchInput then return end
+
+    local deadzone = 0.2
+    local shouldW = currentNormZ < -deadzone
+    local shouldS = currentNormZ > deadzone
+    local shouldA = currentNormX < -deadzone
+    local shouldD = currentNormX > deadzone
+
+    -- อัปเดตและย้ำสัญญาณกดปุ่ม W, A, S, D
+    local keysToUpdate = {
+        {Key = "W", ShouldPress = shouldW, Code = Enum.KeyCode.W},
+        {Key = "S", ShouldPress = shouldS, Code = Enum.KeyCode.S},
+        {Key = "A", ShouldPress = shouldA, Code = Enum.KeyCode.A},
+        {Key = "D", ShouldPress = shouldD, Code = Enum.KeyCode.D},
+    }
+
+    for _, data in ipairs(keysToUpdate) do
+        if data.ShouldPress then
+            -- ย้ำสัญญาณกดค้างตลอดเวลา
+            VirtualInputManager:SendKeyEvent(true, data.Code, false, game)
+            activeKeys[data.Key] = true
+        elseif activeKeys[data.Key] then
+            -- ปล่อยปุ่มเมื่อไม่อยู่ในทิศทางนั้น
+            VirtualInputManager:SendKeyEvent(false, data.Code, false, game)
+            activeKeys[data.Key] = false
+        end
+    end
+end)
+
+print("✅ [Custom Joystick] Fixed Drag Hold Issue!")
