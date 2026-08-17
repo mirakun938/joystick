@@ -1,13 +1,19 @@
--- [[ CUSTOM JOYSTICK - BOTTOM-LEFT 50% WITH FORCE ANIMATION STATE ]] --
+-- [[ CUSTOM JOYSTICK - PLAYERMODULE CONTROL INJECTION ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 
 local localPlayer = Players.LocalPlayer
-local camera = Workspace.CurrentCamera
+local playerScripts = localPlayer:WaitForChild("PlayerScripts")
 
--- 1. สร้าง ScreenGui และ Touch Zone (ซ้ายล่าง 50%)
+-- 1. ดึง ControlModule ของ Roblox เพื่อเตรียมฉีดค่าการเคลื่อนที่
+local controls = nil
+pcall(function()
+    local playerModule = require(playerScripts:WaitForChild("PlayerModule", 5))
+    controls = playerModule:GetControls()
+end)
+
+-- 2. สร้าง UI และ Touch Zone (โซนซ้ายล่าง 50% ตามภาพ)
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CustomJoystickGui"
 screenGui.ResetOnSpawn = false
@@ -17,11 +23,11 @@ local touchZone = Instance.new("Frame")
 touchZone.Name = "TouchZone"
 touchZone.Parent = screenGui
 touchZone.Size = UDim2.new(0.5, 0, 0.5, 0)      -- กว้าง 50% สูง 50%
-touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- โซนซ้ายล่าง
+touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- ตำแหน่งซ้ายล่าง
 touchZone.BackgroundTransparency = 1 
 touchZone.Active = true
 
--- 2. สร้าง UI Joystick (Base & Thumb)
+-- 3. UI Joystick (Base & Thumb)
 local joystickRadius = 60
 
 local joystickBase = Instance.new("Frame")
@@ -48,12 +54,12 @@ joystickThumb.BackgroundTransparency = 0.2
 
 local thumbCorner = Instance.new("UICorner")
 thumbCorner.CornerRadius = UDim.new(1, 0)
-thumbCorner.Parent = joystickThumb
+thumbCorner.Parent = thumbCorner and joystickThumb
 
--- 3. ระบบคำนวณการแตะและการเคลื่อนที่
+-- 4. ระบบคำนวณการแตะและลาก
 local currentTouchInput = nil
 local startPos = Vector2.new(0, 0)
-local moveVector = Vector3.new(0, 0, 0)
+local rawMoveVector = Vector3.new(0, 0, 0)
 
 touchZone.InputBegan:Connect(function(input)
     if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and not currentTouchInput then
@@ -79,9 +85,10 @@ UserInputService.InputChanged:Connect(function(input)
         joystickThumb.Position = UDim2.new(0.5, thumbOffset.X, 0.5, thumbOffset.Y)
 
         local normX = thumbOffset.X / joystickRadius
-        local normForward = -thumbOffset.Y / joystickRadius
+        local normZ = thumbOffset.Y / joystickRadius
 
-        moveVector = Vector3.new(normX, 0, normForward)
+        -- ค่าสำหรับ Roblox ControlModule: X = ซ้าย/ขวา, Z = หน้า(-)/หลัง(+)
+        rawMoveVector = Vector3.new(normX, 0, normZ)
     end
 end)
 
@@ -89,38 +96,31 @@ local function stopJoystick(input)
     if input == currentTouchInput then
         currentTouchInput = nil
         joystickBase.Visible = false
-        moveVector = Vector3.new(0, 0, 0)
+        rawMoveVector = Vector3.new(0, 0, 0)
     end
 end
 
 UserInputService.InputEnded:Connect(stopJoystick)
 
--- 4. สั่งการเคลื่อนที่ + กระตุ้น State ของ Animation
-RunService.RenderStepped:Connect(function()
-    local character = localPlayer.Character
-    if not character then return end
-
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
-
-    if moveVector.Magnitude > 0 then
-        -- คำนวณทิศทางตามกล้อง
-        local camCFrame = camera.CFrame
-        local cameraForward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
-        local cameraRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
-        local worldDirection = (cameraRight * moveVector.X) + (cameraForward * moveVector.Z)
-
-        -- 1. สั่งเคลื่อนที่ตัวละคร
-        humanoid:Move(worldDirection, false)
-
-        -- 2. บังคับเปลี่ยน State เป็น Running เพื่อปลุกให้ Animation Controller ของเกมทำงาน
-        if humanoid:GetState() ~= Enum.HumanoidStateType.Running and humanoid:GetState() ~= Enum.HumanoidStateType.Freefall then
-            humanoid:ChangeState(Enum.HumanoidStateType.Running)
+-- 5. Hook คำสั่งเดินเข้าสู่อินพุตหลักของเกมโดยตรง (ส่งผลให้ Animate ทำงานสมบูรณ์)
+if controls then
+    local oldGetMoveVector = controls.GetMoveVector
+    controls.GetMoveVector = function(self)
+        if rawMoveVector.Magnitude > 0 then
+            return rawMoveVector
         end
-    else
-        -- เมื่อหยุดลากจอย ให้สั่งหยุดย้ายตำแหน่ง
-        humanoid:Move(Vector3.new(0, 0, 0), false)
+        return oldGetMoveVector(self)
     end
-end)
-
-print("✅ [Custom Joystick] Force State Animation Fix Loaded!")
+    print("✅ [Joystick] Successfully Injected into PlayerModule Controls!")
+else
+    -- สำรองกรณีเกมลบ PlayerModule ออก
+    RunService.RenderStepped:Connect(function()
+        local character = localPlayer.Character
+        if character and rawMoveVector.Magnitude > 0 then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid:Move(rawMoveVector, true)
+            end
+        end
+    end)
+end
