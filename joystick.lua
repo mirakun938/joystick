@@ -1,19 +1,11 @@
--- [[ CUSTOM JOYSTICK - PLAYERMODULE CONTROL INJECTION ]] --
+-- [[ CUSTOM JOYSTICK - WASD KEYBOARD EMULATOR ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local localPlayer = Players.LocalPlayer
-local playerScripts = localPlayer:WaitForChild("PlayerScripts")
 
--- 1. ดึง ControlModule ของ Roblox เพื่อเตรียมฉีดค่าการเคลื่อนที่
-local controls = nil
-pcall(function()
-    local playerModule = require(playerScripts:WaitForChild("PlayerModule", 5))
-    controls = playerModule:GetControls()
-end)
-
--- 2. สร้าง UI และ Touch Zone (โซนซ้ายล่าง 50% ตามภาพ)
+-- 1. สร้าง ScreenGui และ Touch Zone (ซ้ายล่าง 50% ตามที่คุณกำหนด)
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CustomJoystickGui"
 screenGui.ResetOnSpawn = false
@@ -27,7 +19,7 @@ touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- ตำแหน่งซ้�
 touchZone.BackgroundTransparency = 1 
 touchZone.Active = true
 
--- 3. UI Joystick (Base & Thumb)
+-- 2. สร้าง UI Joystick (Base & Thumb)
 local joystickRadius = 60
 
 local joystickBase = Instance.new("Frame")
@@ -54,12 +46,59 @@ joystickThumb.BackgroundTransparency = 0.2
 
 local thumbCorner = Instance.new("UICorner")
 thumbCorner.CornerRadius = UDim.new(1, 0)
-thumbCorner.Parent = thumbCorner and joystickThumb
+thumbCorner.Parent = joystickThumb
 
--- 4. ระบบคำนวณการแตะและลาก
+-- 3. ระบบจำลองการกดคีย์บอร์ด (WASD Keyboard System)
+local activeKeys = {
+    W = false,
+    A = false,
+    S = false,
+    D = false
+}
+
+local function updateWASDKeys(normX, normZ)
+    local deadzone = 0.25 -- ระยะเริ่มต้นของจอยสติ๊กก่อนเริ่มส่งสัญญาณกด
+
+    local shouldW = normZ < -deadzone -- ดันขึ้น = กด W
+    local shouldS = normZ > deadzone  -- ดึงลง = กด S
+    local shouldA = normX < -deadzone -- ลากซ้าย = กด A
+    local shouldD = normX > deadzone  -- ลากขวา = กด D
+
+    -- ส่งสัญญาณกด/ปล่อย ปุ่ม W
+    if shouldW ~= activeKeys.W then
+        activeKeys.W = shouldW
+        VirtualInputManager:SendKeyEvent(shouldW, Enum.KeyCode.W, false, game)
+    end
+    -- ส่งสัญญาณกด/ปล่อย ปุ่ม S
+    if shouldS ~= activeKeys.S then
+        activeKeys.S = shouldS
+        VirtualInputManager:SendKeyEvent(shouldS, Enum.KeyCode.S, false, game)
+    end
+    -- ส่งสัญญาณกด/ปล่อย ปุ่ม A
+    if shouldA ~= activeKeys.A then
+        activeKeys.A = shouldA
+        VirtualInputManager:SendKeyEvent(shouldA, Enum.KeyCode.A, false, game)
+    end
+    -- ส่งสัญญาณกด/ปล่อย ปุ่ม D
+    if shouldD ~= activeKeys.D then
+        activeKeys.D = shouldD
+        VirtualInputManager:SendKeyEvent(shouldD, Enum.KeyCode.D, false, game)
+    end
+end
+
+local function releaseAllKeys()
+    for keyName, isPressed in pairs(activeKeys) do
+        if isPressed then
+            activeKeys[keyName] = false
+            local keyCode = Enum.KeyCode[keyName]
+            VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+        end
+    end
+end
+
+-- 4. ระบบรับค่า Touch/Mouse Input
 local currentTouchInput = nil
 local startPos = Vector2.new(0, 0)
-local rawMoveVector = Vector3.new(0, 0, 0)
 
 touchZone.InputBegan:Connect(function(input)
     if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and not currentTouchInput then
@@ -87,8 +126,8 @@ UserInputService.InputChanged:Connect(function(input)
         local normX = thumbOffset.X / joystickRadius
         local normZ = thumbOffset.Y / joystickRadius
 
-        -- ค่าสำหรับ Roblox ControlModule: X = ซ้าย/ขวา, Z = หน้า(-)/หลัง(+)
-        rawMoveVector = Vector3.new(normX, 0, normZ)
+        -- แปลงระยะจอยสติ๊กเป็นคำสั่งกด WASD
+        updateWASDKeys(normX, normZ)
     end
 end)
 
@@ -96,31 +135,10 @@ local function stopJoystick(input)
     if input == currentTouchInput then
         currentTouchInput = nil
         joystickBase.Visible = false
-        rawMoveVector = Vector3.new(0, 0, 0)
+        releaseAllKeys() -- ปล่อยปุ่มเดินทั้งหมดเมื่อยกนิ้วออก
     end
 end
 
 UserInputService.InputEnded:Connect(stopJoystick)
 
--- 5. Hook คำสั่งเดินเข้าสู่อินพุตหลักของเกมโดยตรง (ส่งผลให้ Animate ทำงานสมบูรณ์)
-if controls then
-    local oldGetMoveVector = controls.GetMoveVector
-    controls.GetMoveVector = function(self)
-        if rawMoveVector.Magnitude > 0 then
-            return rawMoveVector
-        end
-        return oldGetMoveVector(self)
-    end
-    print("✅ [Joystick] Successfully Injected into PlayerModule Controls!")
-else
-    -- สำรองกรณีเกมลบ PlayerModule ออก
-    RunService.RenderStepped:Connect(function()
-        local character = localPlayer.Character
-        if character and rawMoveVector.Magnitude > 0 then
-            local humanoid = character:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                humanoid:Move(rawMoveVector, true)
-            end
-        end
-    end)
-end
+print("✅ [Custom Joystick] WASD Emulator Ready! (Fixed Movement & Animation)")
