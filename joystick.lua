@@ -1,10 +1,12 @@
--- [[ CUSTOM JOYSTICK - ANTI-RESET WASD EMULATOR ]] --
+-- [[ HYBRID JOYSTICK - 360° MOVEMENT + WASD ANIMATION ENGINE ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
 local localPlayer = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 
 -- 1. สร้าง ScreenGui และ Touch Zone (ซ้ายล่าง 50%)
 local screenGui = Instance.new("ScreenGui")
@@ -16,11 +18,11 @@ local touchZone = Instance.new("Frame")
 touchZone.Name = "TouchZone"
 touchZone.Parent = screenGui
 touchZone.Size = UDim2.new(0.5, 0, 0.5, 0)      -- กว้าง 50% สูง 50%
-touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- ตำแหน่งซ้ายล่าง
+touchZone.Position = UDim2.new(0, 0, 0.5, 0)    -- มุมซ้ายล่าง
 touchZone.BackgroundTransparency = 1 
 touchZone.Active = true
 
--- 2. UI Joystick (Base & Thumb)
+-- 2. สร้าง UI Joystick (Base & Thumb)
 local joystickRadius = 60
 
 local joystickBase = Instance.new("Frame")
@@ -49,29 +51,28 @@ local thumbCorner = Instance.new("UICorner")
 thumbCorner.CornerRadius = UDim.new(1, 0)
 thumbCorner.Parent = joystickThumb
 
--- 3. ระบบจัดการปุ่ม WASD
-local activeKeys = {
-    W = false,
-    A = false,
-    S = false,
-    D = false
-}
+-- 3. ตัวแปรเก็บสถานะการควบคุม
+local currentTouchInput = nil
+local startPos = Vector2.new(0, 0)
+local moveVector = Vector3.new(0, 0, 0)
 
+local activeKeys = { W = false, A = false, S = false, D = false }
+
+-- ฟังก์ชันอัปเดตสถานะปุ่ม WASD
 local function updateWASDState(normX, normZ)
-    local deadzone = 0.25
+    local deadzone = 0.2
 
     local shouldW = normZ < -deadzone
     local shouldS = normZ > deadzone
     local shouldA = normX < -deadzone
     local shouldD = normX > deadzone
 
-    -- ปล่อยปุ่มที่ไม่ได้กดแล้ว
+    -- ปล่อยปุ่มที่ไม่ตรงทิศทาง
     if not shouldW and activeKeys.W then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game) end
     if not shouldS and activeKeys.S then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game) end
     if not shouldA and activeKeys.A then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.A, false, game) end
     if not shouldD and activeKeys.D then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.D, false, game) end
 
-    -- อัปเดตสถานะปุ่ม
     activeKeys.W = shouldW
     activeKeys.S = shouldS
     activeKeys.A = shouldA
@@ -88,9 +89,6 @@ local function releaseAllKeys()
 end
 
 -- 4. ระบบรับ Touch Input
-local currentTouchInput = nil
-local startPos = Vector2.new(0, 0)
-
 touchZone.InputBegan:Connect(function(input)
     if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and not currentTouchInput then
         currentTouchInput = input
@@ -117,7 +115,11 @@ UserInputService.InputChanged:Connect(function(input)
         local normX = thumbOffset.X / joystickRadius
         local normZ = thumbOffset.Y / joystickRadius
 
+        -- อัปเดต WASD สำหรับเล่น Animation
         updateWASDState(normX, normZ)
+
+        -- คำนวณ Move Vector สำหรับทิศทางการเคลื่อนที่อิสระ 360 องศา
+        moveVector = Vector3.new(normX, 0, -normZ)
     end
 end)
 
@@ -125,21 +127,37 @@ local function stopJoystick(input)
     if input == currentTouchInput then
         currentTouchInput = nil
         joystickBase.Visible = false
+        moveVector = Vector3.new(0, 0, 0)
         releaseAllKeys()
     end
 end
 
 UserInputService.InputEnded:Connect(stopJoystick)
 
--- 5. ส่งสัญญาณย้ำคีย์บอร์ดทุกเฟรม (ป้องกัน Roblox Auto-Reset เมื่อสลับโหมด Touch)
+-- 5. รวมการทำงานสองระบบใน RenderStepped Loop
 RunService.RenderStepped:Connect(function()
     if currentTouchInput then
+        -- [ระบบ A] ส่งสัญญาณ WASD ซ้ำทุกเฟรม เพื่อรักษา Animation การเดิน/วิ่ง ไม่ให้หยุดกะทันหัน
         for keyName, isPressed in pairs(activeKeys) do
             if isPressed then
                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode[keyName], false, game)
             end
         end
+
+        -- [ระบบ B] บังคับทิศทางการเดินจริงแบบ 360 องศาตามมุมกล้อง
+        local character = localPlayer.Character
+        if character and moveVector.Magnitude > 0 then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                local camCFrame = camera.CFrame
+                local cameraForward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
+                local cameraRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
+
+                local worldDirection = (cameraRight * moveVector.X) + (cameraForward * moveVector.Z)
+                humanoid:Move(worldDirection, false)
+            end
+        end
     end
 end)
 
-print("✅ [Custom Joystick] Continuous Hold Fix Loaded!")
+print("🚀 [Hybrid Joystick] 360° Movement + WASD Animation Ready!")
