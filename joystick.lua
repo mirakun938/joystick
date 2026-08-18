@@ -1,4 +1,4 @@
--- [[ HYBRID JOYSTICK - 360° MOVEMENT + WASD ANIMATION ENGINE ]] --
+-- [[ HYBRID JOYSTICK - RESPAWN FIX & CAMERA TRACKING ]] --
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -6,7 +6,6 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local localPlayer = Players.LocalPlayer
-local camera = Workspace.CurrentCamera
 
 -- 1. สร้าง ScreenGui และ Touch Zone (ซ้ายล่าง 50%)
 local screenGui = Instance.new("ScreenGui")
@@ -67,7 +66,6 @@ local function updateWASDState(normX, normZ)
     local shouldA = normX < -deadzone
     local shouldD = normX > deadzone
 
-    -- ปล่อยปุ่มที่ไม่ตรงทิศทาง
     if not shouldW and activeKeys.W then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game) end
     if not shouldS and activeKeys.S then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game) end
     if not shouldA and activeKeys.A then VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.A, false, game) end
@@ -115,10 +113,9 @@ UserInputService.InputChanged:Connect(function(input)
         local normX = thumbOffset.X / joystickRadius
         local normZ = thumbOffset.Y / joystickRadius
 
-        -- อัปเดต WASD สำหรับเล่น Animation
         updateWASDState(normX, normZ)
 
-        -- คำนวณ Move Vector สำหรับทิศทางการเคลื่อนที่อิสระ 360 องศา
+        -- คำนวณ Move Vector สำหรับทิศทาง 360 องศา
         moveVector = Vector3.new(normX, 0, -normZ)
     end
 end)
@@ -134,22 +131,26 @@ end
 
 UserInputService.InputEnded:Connect(stopJoystick)
 
--- 5. รวมการทำงานสองระบบใน RenderStepped Loop
+-- 5. ระบบคำนวณทิศทาง (ดึงกล้องปัจจุบันแบบ Dynamic ตลอดเวลา)
 RunService.RenderStepped:Connect(function()
     if currentTouchInput then
-        -- [ระบบ A] ส่งสัญญาณ WASD ซ้ำทุกเฟรม เพื่อรักษา Animation การเดิน/วิ่ง ไม่ให้หยุดกะทันหัน
+        -- [ระบบ A] ส่งสัญญาณ WASD ต่อเนื่อง
         for keyName, isPressed in pairs(activeKeys) do
             if isPressed then
                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode[keyName], false, game)
             end
         end
 
-        -- [ระบบ B] บังคับทิศทางการเดินจริงแบบ 360 องศาตามมุมกล้อง
+        -- [ระบบ B] คำนวณการเดิน 360 องศา
         local character = localPlayer.Character
         if character and moveVector.Magnitude > 0 then
             local humanoid = character:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                local camCFrame = camera.CFrame
+            
+            -- ดึง CurrentCamera ณ ปัจจุบันเสมอ เพื่อป้องกันปัญหากล้องสลับทิศหลัง Respawn
+            local currentCamera = Workspace.CurrentCamera
+            
+            if humanoid and currentCamera then
+                local camCFrame = currentCamera.CFrame
                 local cameraForward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
                 local cameraRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
@@ -160,4 +161,4 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-print("🚀 [Hybrid Joystick] 360° Movement + WASD Animation Ready!")
+print("✅ [Hybrid Joystick] Dynamic Camera Tracking Active - Respawn Bug Fixed!")
